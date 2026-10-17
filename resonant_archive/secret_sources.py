@@ -101,6 +101,15 @@ def _trim(seg: str) -> str:
     return seg.strip().lstrip("({ \t\n\r\f\v").rstrip(")}\"' \t\n\r\f\v")
 
 
+# The quotes and Unicode whitespace (exactly what ``\s`` matches in a str pattern) around a ``sh -c`` body.
+_QUOTES_AND_SPACE = "\"'\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+
+
+def _trim_quotes(s: str) -> str:
+    # strip() for the same reason: `["'\s]+$` was quadratic on a long run of quotes inside the body (13 s at 50,000)
+    return s.strip(_QUOTES_AND_SPACE)
+
+
 def _segment_secret(seg: str, depth: int = 0) -> bool:
     seg = _trim(seg)
     if not seg or depth > 5:
@@ -113,7 +122,7 @@ def _segment_secret(seg: str, depth: int = 0) -> bool:
             return True
     m = _SHELL_C.match(seg)
     if m:
-        inner = re.sub(r"^[\"'\s]+|[\"'\s]+$", "", m.group(1))
+        inner = _trim_quotes(m.group(1))
         return any(_segment_secret(s, depth + 1) for s in _SEGMENTS.split(inner))
     return False
 

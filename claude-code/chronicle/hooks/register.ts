@@ -479,6 +479,15 @@ function trimSegment(seg: string): string {
   return t.slice(0, e)
 }
 
+// The quotes and spaces around a `sh -c` body, with a loop for the same reason: `/["'\s]+$/` was quadratic on a long run
+// of quotes inside the body (2 s at 50,000, 40 s at 200,000).
+export function trimQuotes(s: string): string {
+  const t = s.replace(/^["'\s]+/, '')
+  let e = t.length
+  while (e > 0 && /["'\s]/.test(t[e - 1]!)) e--
+  return t.slice(0, e)
+}
+
 function segmentSecret(segment: string, depth = 0): boolean {
   const seg = trimSegment(segment)
   if (!seg || depth > 5) return false
@@ -489,7 +498,7 @@ function segmentSecret(segment: string, depth = 0): boolean {
   }
   const m = SHELL_C.exec(seg)
   if (m) {
-    const inner = m[1]!.replace(/^["'\s]+|["'\s]+$/g, '')
+    const inner = trimQuotes(m[1]!)
     return inner.split(SEGMENTS).some(x => segmentSecret(x, depth + 1))
   }
   return false
@@ -573,13 +582,34 @@ export function blockText(content: unknown): { text: string; tools: string[]; re
   return { text: capText(redact(text.join('\n')), ROW_TEXT_MAX), tools, results }
 }
 
+const REMINDER_CLOSE = '</system-reminder>'
+const QUEUED_HEAD = /^The user sent a new message while you were working:[ \t]*\n/
+const QUEUED_NOTE = 'This is how Claude Code surfaces messages the user sends mid-turn'
+
 // The person's words inside a prompt folded into a running turn (an attachment row named queued_command), from the
 // engine's rendering. `user` false: the wrapper was not recognised, so the rendering is kept whole (never lost).
+// No regex here runs to `$` over the person's words: `\s*<\/system-reminder>\s*$` and the lazy body before the engine's
+// note were both quadratic on a long run of spaces or newlines (2 s and 4 s at 50,000).
 export function queuedPrompt(rendered: string): { text: string; user: boolean } {
-  const s = String(rendered ?? '').replace(/^\s*<system-reminder>\s*/, '').replace(/\s*<\/system-reminder>\s*$/, '')
-  const m = /^The user sent a new message while you were working:[ \t]*\n([\s\S]*?)(?:\n\s*This is how Claude Code surfaces messages the user sends mid-turn[\s\S]*)?$/.exec(s)
-  if (m) return { text: m[1]!.trim(), user: true }
-  return { text: s.trim(), user: false }
+  let s = String(rendered ?? '').replace(/^\s*<system-reminder>\s*/, '')
+  const end = s.trimEnd()
+  if (end.endsWith(REMINDER_CLOSE)) s = end.slice(0, -REMINDER_CLOSE.length).trimEnd()
+  const head = QUEUED_HEAD.exec(s)
+  if (!head) return { text: s.trim(), user: false }
+  const body = s.slice(head[0].length)
+  return { text: body.slice(0, queuedNoteStart(body)).trim(), user: true }
+}
+
+// Where the engine's note starts: the first newline of the whitespace run before the first occurrence of the note that
+// has a newline in that run (the end of the body when there is none). Each run is walked once, so this is linear.
+function queuedNoteStart(body: string): number {
+  for (let q = body.indexOf(QUEUED_NOTE); q !== -1; q = body.indexOf(QUEUED_NOTE, q + 1)) {
+    let b = q
+    while (b > 0 && /\s/.test(body[b - 1]!)) b--
+    const nl = body.indexOf('\n', b)
+    if (nl !== -1 && nl < q) return nl
+  }
+  return body.length
 }
 
 // Records one stored row. Called after next(): must never throw (the caller also wraps it).

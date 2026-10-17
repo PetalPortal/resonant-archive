@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { redact, secretBearing, blockText } from '../hooks/register'
+import { redact, secretBearing, blockText, trimQuotes, queuedPrompt } from '../hooks/register'
 
 // Every key below is obviously fake and built from repeated characters.
 const A20 = 'A'.repeat(20)
@@ -439,3 +439,73 @@ for (const [name, v] of Object.entries(HOSTILE)) {
     expect(Date.now() - t0).toBeLessThan(3000)
   })
 }
+
+// 2.0.1: the quotes around a `sh -c` body were trimmed with a regex ending in `$`, quadratic on a long run of quotes or
+// spaces inside the body (2 s at 50,000, 40 s at 200,000). Each 500 KB shape must now be scanned in under a second.
+const N = 500_000
+const HOSTILE_SHELL_C: Record<string, string> = {
+  'double quotes': 'bash -c "x' + '"'.repeat(N) + 'y"', 'single quotes': "sh -c 'x" + "'".repeat(N) + "y'",
+  'mixed quotes': 'bash -c "x' + `"'`.repeat(N / 2) + 'y"', spaces: 'bash -c "x' + ' '.repeat(N) + 'y"',
+  'quotes and spaces': "zsh -c 'x" + "' \t".repeat(N / 4) + "y'", 'unicode spaces': 'bash -c "x' + '　 '.repeat(N / 2) + 'y"',
+  sudo: 'sudo -E bash -c "x' + '"'.repeat(N) + 'y"', nested: `bash -c "sh -c 'x` + "'".repeat(N) + `y'"`,
+  flags: 'bash -l -e -c "x' + '"'.repeat(N) + 'y"', 'no closing': 'bash -c "x' + '"'.repeat(N) + 'y',
+}
+for (const [name, v] of Object.entries(HOSTILE_SHELL_C)) {
+  test(`a sh -c body is trimmed in linear time: ${name}`, () => {
+    const t0 = Date.now()
+    expect(secretBearing('Bash', { command: v })).toBe(false)
+    expect(Date.now() - t0).toBeLessThan(1000)
+  })
+}
+
+test('a hostile sh -c body is still read', () => {
+  expect(secretBearing('Bash', { command: 'bash -c "' + '"'.repeat(N) + 'env' + '"'.repeat(N) + '"' })).toBe(true)
+  expect(secretBearing('Bash', { command: "sh -c '" + "' ".repeat(N / 2) + "printenv'" })).toBe(true)
+})
+
+test('trimQuotes gives what the old regex gave', () => {
+  const old = (s: string) => s.replace(/^["'\s]+|["'\s]+$/g, '')
+  const normal = ['env', "'env'", '"cd x && env"', "  'ls -la'  ", `"'printenv'"`, "'", '""', '', ' \t\n', "'a' 'b'",
+    '　env ', `x'y"z`, `'echo "hi there"'`, "'\t'cmd'\n'"]
+  let seed = 201
+  const rnd = (k: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % k }
+  const alphabet = `"' \t\nab;　\u0085﻿`
+  for (let i = 0; i < 3000; i++) normal.push(Array.from({ length: rnd(12) }, () => alphabet[rnd(alphabet.length)]).join(''))
+  for (const s of normal) expect(trimQuotes(s)).toBe(old(s))
+})
+
+// queuedPrompt had two more: `\s*<\/system-reminder>\s*$` and a lazy body before the engine's note (2 s and 4 s at 50,000
+// spaces or newlines). The old function is kept here as the reference for the parity cases.
+function oldQueuedPrompt(rendered: string): { text: string; user: boolean } {
+  const s = String(rendered ?? '').replace(/^\s*<system-reminder>\s*/, '').replace(/\s*<\/system-reminder>\s*$/, '')
+  const m = /^The user sent a new message while you were working:[ \t]*\n([\s\S]*?)(?:\n\s*This is how Claude Code surfaces messages the user sends mid-turn[\s\S]*)?$/.exec(s)
+  if (m) return { text: m[1]!.trim(), user: true }
+  return { text: s.trim(), user: false }
+}
+const HEAD = 'The user sent a new message while you were working:'
+const NOTE = 'This is how Claude Code surfaces messages the user sends mid-turn'
+
+test('queuedPrompt is linear on a long run of spaces or newlines', () => {
+  for (const fill of [' ', '\n', '\n ', '\t']) {
+    for (const v of [`<system-reminder>\n${HEAD}\nx${fill.repeat(N)}y`, `<system-reminder>\nx${fill.repeat(N)}y`,
+      `${HEAD}\n${fill.repeat(N)}${NOTE}.\n</system-reminder>`, `${HEAD}\n${(NOTE + fill).repeat(N / 100)}`]) {
+      const t0 = Date.now()
+      queuedPrompt(v)
+      expect(Date.now() - t0).toBeLessThan(1000)
+    }
+  }
+})
+
+test('queuedPrompt gives what the old function gave', () => {
+  const words = ['please also check the logs', 'two\nlines', '  padded  ', '', 'it said: ' + NOTE + ' inline', 'a\n\n\nb']
+  const cases: string[] = []
+  for (const w of words) {
+    for (const note of ['', `\n\n${NOTE}.\n`, `\n${NOTE}`, ` ${NOTE}.`, `\n \t\n${NOTE}. And more.\n${NOTE}.`]) {
+      for (const [open, close] of [['<system-reminder>\n', '\n</system-reminder>'], ['', ''], ['  <system-reminder>', '</system-reminder>  \n'], ['', '</system-reminder> x']]) {
+        cases.push(`${open}${HEAD}\n${w}${note}${close}`, `${open}${HEAD} \t\n${w}${note}${close}`, `${open}${w}${note}${close}`, `${open}${HEAD}${w}${close}`)
+      }
+    }
+  }
+  cases.push('', '<system-reminder>', '</system-reminder>', `${HEAD}\n`, `${HEAD}\n${NOTE}`, `${HEAD}\n\n${NOTE}`)
+  for (const c of cases) expect(queuedPrompt(c)).toEqual(oldQueuedPrompt(c))
+})

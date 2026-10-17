@@ -112,6 +112,52 @@ def test_secret_source_rules_are_linear_on_hostile_input(name):
     assert time.time() - t0 < 3
 
 
+# 2.0.1: the quotes around a `sh -c` body were trimmed with a regex ending in `$`, quadratic on a long run of quotes or
+# spaces inside the body (13 s at 50,000). Each 500 KB shape must now be scanned in under a second.
+N = 500_000
+HOSTILE_SHELL_C = {
+    "double quotes": 'bash -c "x' + '"' * N + 'y"', "single quotes": "sh -c 'x" + "'" * N + "y'",
+    "mixed quotes": "bash -c \"x" + "\"'" * (N // 2) + "y\"", "spaces": 'bash -c "x' + " " * N + 'y"',
+    "quotes and spaces": "zsh -c 'x" + "' \t" * (N // 3) + "y'", "unicode spaces": 'bash -c "x' + "\u3000\xa0" * (N // 2) + 'y"',
+    "sudo": 'sudo -E bash -c "x' + '"' * N + 'y"', "nested": "bash -c \"sh -c 'x" + "'" * N + "y'\"",
+    "flags": 'bash -l -e -c "x' + '"' * N + 'y"', "no closing": 'bash -c "x' + '"' * N + "y",
+}
+
+
+@pytest.mark.parametrize("name", sorted(HOSTILE_SHELL_C))
+def test_a_shell_c_body_is_trimmed_in_linear_time(name):
+    import time
+
+    v = HOSTILE_SHELL_C[name]
+    t0 = time.time()
+    assert not secret_bearing("Bash", {"command": v})
+    secret_call_summary("Bash", {"command": v})
+    assert time.time() - t0 < 1
+
+
+def test_a_hostile_shell_c_body_is_still_read():
+    assert secret_bearing("Bash", {"command": 'bash -c "' + '"' * N + "env" + '"' * N + '"'})
+    assert secret_bearing("Bash", {"command": "sh -c '" + "' " * (N // 2) + "printenv'"})
+
+
+def test_the_shell_c_trim_gives_what_the_old_regex_gave():
+    import random
+    import sys
+
+    from resonant_archive.secret_sources import _QUOTES_AND_SPACE, _trim_quotes
+
+    def old(s):
+        return re.sub(r"^[\"'\s]+|[\"'\s]+$", "", s)
+
+    assert set(_QUOTES_AND_SPACE) == {'"', "'"} | {c for c in map(chr, range(sys.maxunicode + 1)) if re.match(r"\s", c)}
+    normal = ["env", "'env'", '"cd x && env"', "  'ls -la'  ", "\"'printenv'\"", "'", '""', "", " \t\n", "'a' 'b'",
+              "\u3000env\xa0", "x'y\"z", "'echo \"hi there\"'", "'\t'cmd'\n'"]
+    rng = random.Random(201)
+    normal += ["".join(rng.choice("\"' \t\nab;\u3000\x85") for _ in range(rng.randrange(12))) for _ in range(3000)]
+    for s in normal:
+        assert _trim_quotes(s) == old(s), repr(s)
+
+
 # ---------------------------------------------------------------- Ward round 2, MED-B: a secret-bearing call keeps no content
 
 VALUE = "hunter2hunter2zq"

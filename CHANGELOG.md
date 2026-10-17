@@ -5,6 +5,13 @@ All notable changes to `resonant-archive` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - Unreleased
+
+### Fixed
+
+- **The quotes around a `sh -c` body are trimmed in linear time.** The secret-source check trimmed them with a regex ending in `$`, which was quadratic on a long run of quotes or spaces inside the body: 13 s at 50,000 characters in the Python importer, 40 s at 200,000 in the chronicle mod. A tool call can carry any text, so one hostile command could stall an import or the mod. Both now use a plain string trim with the same result; a 500 KB body takes well under a second.
+- **The chronicle mod reads a prompt typed mid-turn in linear time.** Taking the engine's wrapper off it used two regexes that were quadratic on a long run of spaces or newlines (2 s and 4 s at 50,000). They are replaced by string scans with the same result.
+
 ## [Unreleased]
 
 ### Security
@@ -104,5 +111,6 @@ Initial public release. Modernized from an earlier internal tool (`vault-archive
 [Apache License 2.0](LICENSE). Earlier releases (0.1.x) were under the Codependent AI Source-Available License; 2.0.0 and later are Apache-2.0.
 
 [Unreleased]: https://github.com/nekyialabs/resonant-archive/compare/v2.0.0...HEAD
+[2.0.1]: https://github.com/nekyialabs/resonant-archive/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/nekyialabs/resonant-archive/compare/v0.1.0...v2.0.0
 [0.1.0]: https://github.com/nekyialabs/resonant-archive/releases/tag/v0.1.0

@@ -122,9 +122,9 @@ def test_bundled_docker_files_match_the_repo_copies():
     assert bundled["docker/init-extensions.sql"] == (ROOT / "docker" / "init-extensions.sql").read_text()
 
 
-def test_version_is_2_0_0():
+def test_version_is_2_0_1():
     import resonant_archive
-    assert resonant_archive.__version__ == "2.0.0"
+    assert resonant_archive.__version__ == "2.0.1"
 
 
 def test_migrate_v01_reads_nothing(tmp_path):
