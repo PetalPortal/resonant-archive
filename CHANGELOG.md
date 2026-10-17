@@ -12,27 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The quotes around a `sh -c` body are trimmed in linear time.** The secret-source check trimmed them with a regex ending in `$`, which was quadratic on a long run of quotes or spaces inside the body: 13 s at 50,000 characters in the Python importer, 40 s at 200,000 in the chronicle mod. A tool call can carry any text, so one hostile command could stall an import or the mod. Both now use a plain string trim with the same result; a 500 KB body takes well under a second.
 - **The chronicle mod reads a prompt typed mid-turn in linear time.** Taking the engine's wrapper off it used two regexes that were quadratic on a long run of spaces or newlines (2 s and 4 s at 50,000). They are replaced by string scans with the same result.
 
-## [Unreleased]
-
-### Security
-
-- **Redaction covers far more shapes**: Stripe, npm, Hugging Face, GitLab, SendGrid, AWS session keys and secret-key assignments, Azure `AccountKey`, `Authorization: Token|Basic|Bearer`, `curl -u`, `sshpass -p`, `mysql -p`, any `scheme://user:password@host`, Slack and Discord webhooks, Discord bot tokens, Twilio, PGP key blocks, `name: value` assignments in any case, "password is X" prose, and long mixed-case tokens. The chronicle mod's copy of the patterns is kept equivalent.
-- **Private-key redaction is linear** (a 500 KB input of `BEGIN` lines took over a minute; it is now instant).
-- **`init` creates a SELECT-only `archive_reader` login** and saves `readonly_dsn`; the MCP server and `recall` use it; `doctor` warns when it is unset or is the owner's login.
-- `init --docker` keeps `.env` in the data folder (not the current directory), replaces a placeholder or short password, and tightens the mode of a kept file to 0600.
-- The embedder verifies all four model files before loading, with a cached marker keyed on modification time and size.
-- Importers redact every stored string (not only the text), redact before cutting, withhold the results of secret-bearing tool calls, skip symlinks, files outside the root and oversize files and lines, and survive deeply nested JSON.
-- The embed server refuses non-loopback `Host` headers and non-JSON POSTs, and times out stalled clients.
-- `import --rebuild` removes only rows written by the same importer under the same label (migration 0002 adds `importer`).
-- **`import --rebuild` is narrower still** (migration 0003 adds `unit_key`): it removes only rows that belong to a unit it re-read in that run and that the re-read no longer produces. Units it did not read (a project filter, a skipped symlink, an oversize or purged file) are never touched; `--rebuild` with `--project` is refused; any skipped file, failed unit or lost line stops the removal. It prints the count and removes only with `--yes` (or an answer at the prompt); `--dry-run` only reports.
-- **A transcript cannot overwrite another source's row by reusing its id**: an upsert updates a row only when the stored `source` and `importer` match; a clash is skipped and counted.
-- **A tool call that reads a secret-bearing source keeps only the tool name and the file (or program) in its stored input**, never `content`, `old_string`, `new_string`, an `echo ... >> .env` value or a heredoc body (Python importer and the chronicle mod). The list of secret files and commands is wider (`.env*`, `.npmrc`, `.netrc`, `.git-credentials`, `.docker/config.json`, `.kube/config`, `secrets.*`, key stores, `terraform.tfstate*`, `/proc/*/environ`, `id_*`; `exec env`, `VAR=x env`, `bash -c env`, `docker compose config`, `systemctl show`, `ssh-add -L`, ...), and a `Grep`/`Glob` whose pattern or path names a secret has its result withheld. Best effort, said so in the docs.
-- Redaction: `--db-pass=` and any `--*-password` flag, `~/.pgpass` lines, short values (4+ characters) after an explicit `password` / `passwd` / `pwd` key; the long-token rule now starts at 40 characters (fewer false positives in code). `redact_dsn` hides `sslpassword=`.
-- The private-strip lint exits 2 when the terms file yields no rules or holds an empty rule, and prints only `path:line` when `CI=true`.
-- `doctor` warns when the read-only role can `CREATE` in schema `public`; [docs/SCHEMA.md](docs/SCHEMA.md) gives the `REVOKE` and explains that `CONNECT` is cluster-wide.
-- CI: every job has a time limit, the wheel check lists all migrations, `.gitleaks.toml` allowlists the synthetic fixtures by file name.
-- CI actions, the compose image and the Claude Code npm release are pinned. The private-strip lint no longer carries a denylist: private terms are read from `PRIVATE_STRIP_TERMS_FILE`.
-
 ## [2.0.0] - 2026-10-16
 
 A rewrite. The story: compaction made more bearable, with an archive as the safety net.
@@ -74,6 +53,25 @@ A rewrite. The story: compaction made more bearable, with an archive as the safe
 - The mod depends on Claude Code hooks, an early-access feature.
 - Embedding timings on a CPU have not been measured and published.
 - Licence: Apache-2.0.
+
+### Security
+
+- **Redaction covers far more shapes**: Stripe, npm, Hugging Face, GitLab, SendGrid, AWS session keys and secret-key assignments, Azure `AccountKey`, `Authorization: Token|Basic|Bearer`, `curl -u`, `sshpass -p`, `mysql -p`, any `scheme://user:password@host`, Slack and Discord webhooks, Discord bot tokens, Twilio, PGP key blocks, `name: value` assignments in any case, "password is X" prose, and long mixed-case tokens. The chronicle mod's copy of the patterns is kept equivalent.
+- **Private-key redaction is linear** (a 500 KB input of `BEGIN` lines took over a minute; it is now instant).
+- **`init` creates a SELECT-only `archive_reader` login** and saves `readonly_dsn`; the MCP server and `recall` use it; `doctor` warns when it is unset or is the owner's login.
+- `init --docker` keeps `.env` in the data folder (not the current directory), replaces a placeholder or short password, and tightens the mode of a kept file to 0600.
+- The embedder verifies all four model files before loading, with a cached marker keyed on modification time and size.
+- Importers redact every stored string (not only the text), redact before cutting, withhold the results of secret-bearing tool calls, skip symlinks, files outside the root and oversize files and lines, and survive deeply nested JSON.
+- The embed server refuses non-loopback `Host` headers and non-JSON POSTs, and times out stalled clients.
+- `import --rebuild` removes only rows written by the same importer under the same label (migration 0002 adds `importer`).
+- **`import --rebuild` is narrower still** (migration 0003 adds `unit_key`): it removes only rows that belong to a unit it re-read in that run and that the re-read no longer produces. Units it did not read (a project filter, a skipped symlink, an oversize or purged file) are never touched; `--rebuild` with `--project` is refused; any skipped file, failed unit or lost line stops the removal. It prints the count and removes only with `--yes` (or an answer at the prompt); `--dry-run` only reports.
+- **A transcript cannot overwrite another source's row by reusing its id**: an upsert updates a row only when the stored `source` and `importer` match; a clash is skipped and counted.
+- **A tool call that reads a secret-bearing source keeps only the tool name and the file (or program) in its stored input**, never `content`, `old_string`, `new_string`, an `echo ... >> .env` value or a heredoc body (Python importer and the chronicle mod). The list of secret files and commands is wider (`.env*`, `.npmrc`, `.netrc`, `.git-credentials`, `.docker/config.json`, `.kube/config`, `secrets.*`, key stores, `terraform.tfstate*`, `/proc/*/environ`, `id_*`; `exec env`, `VAR=x env`, `bash -c env`, `docker compose config`, `systemctl show`, `ssh-add -L`, ...), and a `Grep`/`Glob` whose pattern or path names a secret has its result withheld. Best effort, said so in the docs.
+- Redaction: `--db-pass=` and any `--*-password` flag, `~/.pgpass` lines, short values (4+ characters) after an explicit `password` / `passwd` / `pwd` key; the long-token rule now starts at 40 characters (fewer false positives in code). `redact_dsn` hides `sslpassword=`.
+- The private-strip lint exits 2 when the terms file yields no rules or holds an empty rule, and prints only `path:line` when `CI=true`.
+- `doctor` warns when the read-only role can `CREATE` in schema `public`; [docs/SCHEMA.md](docs/SCHEMA.md) gives the `REVOKE` and explains that `CONNECT` is cluster-wide.
+- CI: every job has a time limit, the wheel check lists all migrations, `.gitleaks.toml` allowlists the synthetic fixtures by file name.
+- CI actions, the compose image and the Claude Code npm release are pinned. The private-strip lint no longer carries a denylist: private terms are read from `PRIVATE_STRIP_TERMS_FILE`.
 
 ## [0.1.0] - 2026-04-09
 
